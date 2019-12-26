@@ -37,6 +37,7 @@ Resources:
       RestApiId: !Ref RestApi
       DeploymentId: !Ref ApiGatewayDeployment
       StageName: v1
+
   #        ##   #    # #####  #####    ##
   #       #  #  ##  ## #    # #    #  #  #
   #      #    # # ## # #####  #    # #    #
@@ -76,6 +77,7 @@ Resources:
           # coding: utf-8
           import json
           import boto3
+          import zipfile
           def handler(event, context):
             print(json.dumps(event))
             if event.get('body') is None:
@@ -85,8 +87,9 @@ Resources:
             pull_request = payload.get('pull_request', None)
             if pull_request is None:
               return { 'statusCode': 200, 'message': 'Event is not pull_request' } 
+            # Upload env.sh to s3
             s3 = boto3.resource('s3')
-            obj = s3.Object('${S3Bucket}', 'env.sh')
+            bucket = s3.Bucket('${S3Bucket}')
             body = "\n".join([
               "URL=%s" % pull_request.get('url', ''),
               "HEAD_REF=%s" % pull_request.get('head', {}).get('ref', ''),
@@ -96,12 +99,11 @@ Resources:
               "BASE_SHA=%s" % pull_request.get('base', {}).get('sha', ''),
               "BASE_REPO_NAME=%s" % pull_request.get('base', {}).get('repo', {}).get('full_name', ''),
             ])
-            response = obj.put(
-              Body = body.encode('utf-8'),
-              ContentEncoding = 'utf-8',
-              ContentType = 'text/plane'
-            )
-            print(response)
+            with open('/tmp/env.sh', mode = 'w') as f:
+              f.write(body)
+            with zipfile.ZipFile('/tmp/env.zip', 'w') as new_zip:
+              new_zip.write('/tmp/env.sh', arcname = 'env.sh', compress_type = zipfile.ZIP_DEFLATED)
+            bucket.upload_file('/tmp/env.zip', 'env.zip')
             return { 'statusCode': 200 }
       Role: !GetAtt LambdaExecutionRole.Arn
       Runtime: python3.7
@@ -113,6 +115,92 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/*/POST/"
 
+  #####  #####  ######    #    # ###### #####   ####  ######
+  #    # #    # #         ##  ## #      #    # #    # #
+  #    # #    # #####     # ## # #####  #    # #      #####
+  #####  #####  #         #    # #      #####  #  ### #
+  #      #   #  #         #    # #      #   #  #    # #
+  #      #    # ######    #    # ###### #    #  ####  ######
+  CodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Ref Name
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: S3
+        Location: !Ref S3Bucket
+        Name: /
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:1.0
+        PrivilegedMode: true
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: !Sub |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.7
+            pre_build:
+              commands:
+              - git config --global user.email pipeline-for-pre-testing@example.com
+              - git config --global user.name pipeline-for-pre-testing
+#            build:
+#              commands:
+#              - npm test
+#              - docker build -t $REPOSITORY_URI:latest .
+#              - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$CODEBUILD_BUILD_NUMBER
+#            post_build:
+#              commands:
+#              - docker push $REPOSITORY_URI
+#              - printf '[{"name":"app","imageUri":"%s"}]' $REPOSITORY_URI:$CODEBUILD_BUILD_NUMBER > imagedefinitions.json
+#          artifacts:
+#            files:
+#            - imagedefinitions.json
+      TimeoutInMinutes: 60
+    DependsOn:
+    - CodeBuildManagedPolicy
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - codebuild.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: /service-role/
+      RoleName: !Sub "codebuild-${Name}-service-role"
+  CodeBuildManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "CodeBuild-${Name}-ManagedPolicy"
+      Roles:
+      - !Ref CodeBuildServiceRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Action:
+          - logs:CreateLogGroup
+          - logs:CreateLogStream
+          - logs:PutLogEvents
+          Resource:
+          - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${Name}"
+          - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${Name}:*"
+        - Effect: Allow
+          Action:
+          - s3:PutObject
+          - s3:GetObject
+          - s3:GetObjectVersion
+          Resource:
+          - !Sub "arn:aws:s3:::${S3Bucket}/*"
+
   #####  # #####  ###### #      # #    # ######
   #    # # #    # #      #      # ##   # #
   #    # # #    # #####  #      # # #  # #####
@@ -121,6 +209,159 @@ Resources:
   #      # #      ###### ###### # #    # ######
   S3Bucket:
     Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Ref Name
+      RoleArn: !GetAtt PipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref S3Bucket
+      Stages:
+      - Name: Source
+        Actions:
+        - Name: Source
+          ActionTypeId:
+            Category: Source
+            Owner: AWS
+            Version: 1
+            Provider: S3
+          OutputArtifacts:
+          - Name: SourceOutput
+          Configuration:
+            S3Bucket: !Ref S3Bucket
+            S3ObjectKey: env.zip
+          RunOrder: 1
+      - Name: PreMerge
+        Actions:
+        - Name: CodeBuild
+          ActionTypeId:
+            Category: Build
+            Owner: AWS
+            Version: 1
+            Provider: CodeBuild
+          InputArtifacts:
+          - Name: SourceOutput
+          OutputArtifacts:
+          - Name: PreMergeOutput
+          Configuration:
+            ProjectName: !Ref CodeBuild
+          RunOrder: 1
+    DependsOn:
+    - PipelineManagedPolicy
+  PipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - codepipeline.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: /service-role/
+      RoleName: !Sub "codepipeline-${Name}-service-role"
+  PipelineManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "CodePipeline-${Name}-ManagedPolicy"
+      Roles:
+      - !Ref PipelineServiceRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:GetObject
+          - s3:GetObjectVersion
+          - s3:GetBucketVersioning
+          Resource: "*"
+        - Effect: Allow
+          Action:
+          - s3:PutObject
+          Resource:
+          - "arn:aws:s3:::codepipeline*"
+          - "arn:aws:s3:::elasticbeanstalk*"
+        - Effect: Allow
+          Action:
+          - codecommit:CancelUploadArchive
+          - codecommit:GetBranch
+          - codecommit:GetCommit
+          - codecommit:GetUploadArchiveStatus
+          - codecommit:UploadArchive
+          Resource: "*"
+        - Effect: Allow
+          Action:
+          - codedeploy:CreateDeployment
+          - codedeploy:GetApplicationRevision
+          - codedeploy:GetDeployment
+          - codedeploy:GetDeploymentConfig
+          - codedeploy:RegisterApplicationRevision
+          Resource: "*"
+        - Effect: Allow
+          Action:
+          - "elasticbeanstalk:*"
+          - "ec2:*"
+          - "elasticloadbalancing:*"
+          - "autoscaling:*"
+          - "cloudwatch:*"
+          - "s3:*"
+          - "sns:*"
+          - "cloudformation:*"
+          - "rds:*"
+          - "sqs:*"
+          - "ecs:*"
+          - "iam:PassRole"
+          Resource: "*"
+        - Effect: Allow
+          Action:
+          - lambda:InvokeFunction
+          - lambda:ListFunctions
+          Resource: "*"
+        - Effect: Allow
+          Action:
+          - opsworks:CreateDeployment
+          - opsworks:DescribeApps
+          - opsworks:DescribeCommands
+          - opsworks:DescribeDeployments
+          - opsworks:DescribeInstances
+          - opsworks:DescribeStacks
+          - opsworks:UpdateApp
+          - opsworks:UpdateStack
+          Resource: "*"
+        - Effect: Allow
+          Action:
+          - cloudformation:CreateStack
+          - cloudformation:DeleteStack
+          - cloudformation:DescribeStacks
+          - cloudformation:UpdateStack
+          - cloudformation:CreateChangeSet
+          - cloudformation:DeleteChangeSet
+          - cloudformation:DescribeChangeSet
+          - cloudformation:ExecuteChangeSet
+          - cloudformation:SetStackPolicy
+          - cloudformation:ValidateTemplate
+          - iam:PassRole
+          Resource: "*"
+        - Effect: Allow
+          Action:
+          - codebuild:BatchGetBuilds
+          - codebuild:StartBuild
+          Resource: "*"
+        - Effect: Allow
+          Action:
+          - devicefarm:ListProjects
+          - devicefarm:ListDevicePools
+          - devicefarm:GetRun
+          - devicefarm:GetUpload
+          - devicefarm:CreateUpload
+          - devicefarm:ScheduleRun
+          Resource: "*"
 
 Outputs:
   InvokeURL:
