@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  Name:
+    Type: String
+    Default: pipeline-for-pre-testing
+
+Resources:
+    ##   #####  #     ####    ##   ##### ###### #    #   ##   #   #
+   #  #  #    # #    #    #  #  #    #   #      #    #  #  #   # #
+  #    # #    # #    #      #    #   #   #####  #    # #    #   #
+  ###### #####  #    #  ### ######   #   #      # ## # ######   #
+  #    # #      #    #    # #    #   #   #      ##  ## #    #   #
+  #    # #      #     ####  #    #   #   ###### #    # #    #   #
+  RestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Ref Name
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RestApi
+      HttpMethod: POST
+      ResourceId: !GetAtt RestApi.RootResourceId
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WakeUpFunction.Arn}/invocations
+        IntegrationHttpMethod: POST
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref RestApi
+  ApiGatewayStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref RestApi
+      DeploymentId: !Ref ApiGatewayDeployment
+      StageName: v1
+  #        ##   #    # #####  #####    ##
+  #       #  #  ##  ## #    # #    #  #  #
+  #      #    # # ## # #####  #    # #    #
+  #      ###### #    # #    # #    # ######
+  #      #    # #    # #    # #    # #    #
+  ###### #    # #    # #####  #####  #    #
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+  LambdaExecutionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${Name}
+      Roles:
+      - !Ref LambdaExecutionRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Action: s3:PutObject
+          Resource: !Sub "arn:aws:s3:::${S3Bucket}/*"
+  WakeUpFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Code:
+        ZipFile: !Sub |
+          # coding: utf-8
+          import json
+          import boto3
+          def handler(event, context):
+            print(json.dumps(event))
+            if event.get('body') is None:
+              return { 'statusCode': 200, 'message': 'None Payload' }
+            payload = json.loads(event.get('body'))
+            print(json.dumps(payload))
+            pull_request = payload.get('pull_request', None)
+            if pull_request is None:
+              return { 'statusCode': 200, 'message': 'Event is not pull_request' } 
+            s3 = boto3.resource('s3')
+            obj = s3.Object('${S3Bucket}', 'env.sh')
+            body = "\n".join([
+              "URL=%s" % pull_request.get('url', ''),
+              "HEAD_REF=%s" % pull_request.get('head', {}).get('ref', ''),
+              "HEAD_SHA=%s" % pull_request.get('head', {}).get('sha', ''),
+              "HEAD_REPO_NAME=%s" % pull_request.get('head', {}).get('repo', {}).get('full_name', ''),
+              "BASE_REF=%s" % pull_request.get('base', {}).get('ref', ''),
+              "BASE_SHA=%s" % pull_request.get('base', {}).get('sha', ''),
+              "BASE_REPO_NAME=%s" % pull_request.get('base', {}).get('repo', {}).get('full_name', ''),
+            ])
+            response = obj.put(
+              Body = body.encode('utf-8'),
+              ContentEncoding = 'utf-8',
+              ContentType = 'text/plane'
+            )
+            print(response)
+            return { 'statusCode': 200 }
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.7
+  WakeUpFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WakeUpFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/*/POST/"
+
+  #####  # #####  ###### #      # #    # ######
+  #    # # #    # #      #      # ##   # #
+  #    # # #    # #####  #      # # #  # #####
+  #####  # #####  #      #      # #  # # #
+  #      # #      #      #      # #   ## #
+  #      # #      ###### ###### # #    # ######
+  S3Bucket:
+    Type: AWS::S3::Bucket
+
+Outputs:
+  InvokeURL:
+    Value: !Sub https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/v1
