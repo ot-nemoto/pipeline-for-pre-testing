@@ -6,6 +6,33 @@
 
 ## デプロイ
 
+**GitHubからソースコードを取得するためのアクセストークンを生成**
+
+```sh
+curl -u "your github username" \
+     -d '{"scopes":["repo"],"note":"pipeline-for-ecs-deploy-v1"}' \
+     https://api.github.com/authorizations
+  # {
+  #   ...
+  #   "token": "774d8f6c********************************",
+  #   ...
+  # }
+```
+
+**生成したトークンをSSMパラメータストアに登録**
+
+```sh
+GITHUB_OAUTH_TOKEN=774d8f6c********************************
+aws ssm put-parameter \
+    --name pipeline-for-pre-testing-github-oauth-token \
+    --value ${GITHUB_OAUTH_TOKEN} \
+    --type String
+  # {
+  #     "Tier": "Standard",
+  #     "Version": 1
+  # }
+```
+
 **テンプレートから環境を構築**
 
 ```sh
@@ -24,6 +51,8 @@ aws cloudformation describe-stacks \
     --output text
   # (e.g.) https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/v1
 ```
+
+**対象のGitHubリポジトリのWebhookを登録**
 
 Settings > Webhooks > Add webhook
 

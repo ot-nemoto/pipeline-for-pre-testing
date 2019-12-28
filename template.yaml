@@ -4,6 +4,9 @@ Parameters:
   Name:
     Type: String
     Default: pipeline-for-pre-testing
+  GitHubOAuthToken:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: pipeline-for-pre-testing-github-oauth-token
 
 Resources:
     ##   #####  #     ####    ##   ##### ###### #    #   ##   #   #
@@ -91,13 +94,15 @@ Resources:
             s3 = boto3.resource('s3')
             bucket = s3.Bucket('${S3Bucket}')
             body = "\n".join([
-              "URL=%s" % pull_request.get('url', ''),
-              "HEAD_REF=%s" % pull_request.get('head', {}).get('ref', ''),
-              "HEAD_SHA=%s" % pull_request.get('head', {}).get('sha', ''),
-              "HEAD_REPO_NAME=%s" % pull_request.get('head', {}).get('repo', {}).get('full_name', ''),
-              "BASE_REF=%s" % pull_request.get('base', {}).get('ref', ''),
-              "BASE_SHA=%s" % pull_request.get('base', {}).get('sha', ''),
-              "BASE_REPO_NAME=%s" % pull_request.get('base', {}).get('repo', {}).get('full_name', ''),
+              "URL=%s" %             pull_request['url'],
+              "HEAD_REF=%s" %        pull_request['head']['ref'],
+              "HEAD_SHA=%s" %        pull_request['head']['sha'],
+              "HEAD_REPO_OWNER=%s" % pull_request['head']['repo']['owner']['login'],
+              "HEAD_REPO_NAME=%s" %  pull_request['head']['repo']['name'],
+              "BASE_REF=%s" %        pull_request['base']['ref'],
+              "BASE_SHA=%s" %        pull_request['base']['sha'],
+              "BASE_REPO_OWNER=%s" % pull_request['base']['repo']['owner']['login'],
+              "BASE_REPO_NAME=%s" %  pull_request['base']['repo']['name'],
             ])
             with open('/tmp/env.sh', mode = 'w') as f:
               f.write(body)
@@ -147,18 +152,24 @@ Resources:
               commands:
               - git config --global user.email pipeline-for-pre-testing@example.com
               - git config --global user.name pipeline-for-pre-testing
-#            build:
-#              commands:
-#              - npm test
-#              - docker build -t $REPOSITORY_URI:latest .
-#              - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$CODEBUILD_BUILD_NUMBER
-#            post_build:
-#              commands:
-#              - docker push $REPOSITORY_URI
-#              - printf '[{"name":"app","imageUri":"%s"}]' $REPOSITORY_URI:$CODEBUILD_BUILD_NUMBER > imagedefinitions.json
-#          artifacts:
-#            files:
-#            - imagedefinitions.json
+              - cat ./env.sh
+              - source ./env.sh
+            build:
+              commands:
+              - git clone https://${GitHubOAuthToken}:x-oauth-basic@github.com/$BASE_REPO_OWNER/$BASE_REPO_NAME repo
+              - cd repo
+              - git remote add head https://${GitHubOAuthToken}:x-oauth-basic@github.com/$HEAD_REPO_OWNER/$HEAD_REPO_NAME
+              - git fetch head
+              - git checkout -b HEAD_SHA $HEAD_SHA
+              - git checkout -b BASE_SHA $BASE_SHA
+              - git merge --no-commit HEAD_SHA
+            post_build:
+              commands:
+              - rm -rf ./.git
+          artifacts:
+            files:
+            - '**/*'
+            base-directory: repo
       TimeoutInMinutes: 60
     DependsOn:
     - CodeBuildManagedPolicy
