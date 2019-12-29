@@ -7,6 +7,10 @@ Parameters:
   GitHubOAuthToken:
     Type: AWS::SSM::Parameter::Value<String>
     Default: pipeline-for-pre-testing-github-oauth-token
+  TestingProjectName:
+    Type: String
+  TestingRoleName:
+    Type: String
 
 Resources:
     ##   #####  #     ####    ##   ##### ###### #    #   ##   #   #
@@ -186,13 +190,12 @@ Resources:
           Action:
           - sts:AssumeRole
       Path: /service-role/
-      RoleName: !Sub "codebuild-${Name}-service-role"
   CodeBuildManagedPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub "CodeBuild-${Name}-ManagedPolicy"
       Roles:
       - !Ref CodeBuildServiceRole
+      - !Ref TestingRoleName
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -260,6 +263,21 @@ Resources:
           - Name: PreMergeOutput
           Configuration:
             ProjectName: !Ref CodeBuild
+          RunOrder: 1
+      - Name: Testing
+        Actions:
+        - Name: CodeBuild
+          ActionTypeId:
+            Category: Build
+            Owner: AWS
+            Version: 1
+            Provider: CodeBuild
+          InputArtifacts:
+          - Name: PreMergeOutput
+          OutputArtifacts:
+          - Name: TestingOutput
+          Configuration:
+            ProjectName: !Ref TestingProjectName
           RunOrder: 1
     DependsOn:
     - PipelineManagedPolicy

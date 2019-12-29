@@ -35,10 +35,15 @@ aws ssm put-parameter \
 
 **テンプレートから環境を構築**
 
+- *TESTING_PROJECT_NAME*: テストを行うCodeBuildのプロジェクト名
+- *TESTING_ROLE_NAME*: テストを行うCodeBuildのプロジェクトのサービスロール名
+
 ```sh
 aws cloudformation create-stack \
     --stack-name pipeline-for-pre-testing \
     --capabilities CAPABILITY_NAMED_IAM \
+    --parameters ParameterKey=TestingProjectName,ParameterValue=${TESTING_PROJECT_NAME} \
+                 ParameterKey=TestingRoleName,ParameterValue=${TESTING_ROLE_NAME} \
     --template-body file://template.yaml
 ```
 
