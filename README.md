@@ -57,7 +57,7 @@ aws cloudformation create-stack \
     --stack-name pipeline-for-pre-testing \
     --capabilities CAPABILITY_NAMED_IAM \
     --parameters ParameterKey=TestingProjectName,ParameterValue=${TESTING_PROJECT_NAME} \
-                 ParameterKey=TestingRoleName,ParameterValue=${TESTING_ROLE_NAME} \
+                 ParameterKey=TestingServiceRoleName,ParameterValue=${TESTING_ROLE_NAME} \
     --template-body file://template.yaml
 ```
 
@@ -82,3 +82,22 @@ Settings > Webhooks > Add webhook
 - Which events would you like to trigger this webhook?: Let me select individual events.
   - Pull requests
 - Active: *checked*
+
+## アンデプロイ
+
+**CloudFormationのステップ間でデータを受け渡すためのバケットを空にする**
+
+```sh
+S3BUCKET=$(aws cloudformation describe-stacks \
+    --stack-name pipeline-for-pre-testing \
+    --query 'Stacks[].Outputs[?OutputKey==`S3Bucket`].OutputValue' \
+    --output text)
+aws s3 rm s3://${S3BUCKET} --recursive
+```
+
+**環境を削除**
+
+```sh
+aws cloudformation delete-stack \
+    --stack-name pipeline-for-ecs-devploy-v2
+```

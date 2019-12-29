@@ -9,7 +9,7 @@ Parameters:
     Default: pipeline-for-pre-testing-github-oauth-token
   TestingProjectName:
     Type: String
-  TestingRoleName:
+  TestingServiceRoleName:
     Type: String
 
 Resources:
@@ -176,11 +176,11 @@ Resources:
   #####  #####  #         #    # #      #####  #  ### #
   #      #   #  #         #    # #      #   #  #    # #
   #      #    # ######    #    # ###### #    #  ####  ######
-  CodeBuild:
+  PreMerge:
     Type: AWS::CodeBuild::Project
     Properties:
       Name: !Ref Name
-      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      ServiceRole: !GetAtt PreMergeServiceRole.Arn
       Artifacts:
         Type: S3
         Location: !Ref S3Bucket
@@ -222,8 +222,8 @@ Resources:
             base-directory: repo
       TimeoutInMinutes: 60
     DependsOn:
-    - CodeBuildManagedPolicy
-  CodeBuildServiceRole:
+    - PreMergeManagedPolicy
+  PreMergeServiceRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -236,12 +236,12 @@ Resources:
           Action:
           - sts:AssumeRole
       Path: /service-role/
-  CodeBuildManagedPolicy:
+  PreMergeManagedPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
       Roles:
-      - !Ref CodeBuildServiceRole
-      - !Ref TestingRoleName
+      - !Ref PreMergeServiceRole
+      - !Ref TestingServiceRoleName
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -308,7 +308,7 @@ Resources:
           OutputArtifacts:
           - Name: PreMergeOutput
           Configuration:
-            ProjectName: !Ref CodeBuild
+            ProjectName: !Ref PreMerge
           RunOrder: 1
       - Name: Testing
         Actions:
