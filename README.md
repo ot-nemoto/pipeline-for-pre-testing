@@ -35,8 +35,22 @@ aws ssm put-parameter \
 
 **テンプレートから環境を構築**
 
-- *TESTING_PROJECT_NAME*: テストを行うCodeBuildのプロジェクト名
-- *TESTING_ROLE_NAME*: テストを行うCodeBuildのプロジェクトのサービスロール名
+- *TESTING_PROJECT_NAME*
+  - テストを行うCodeBuildのプロジェクト名
+- *TESTING_ROLE_NAME*
+  - テストを行うCodeBuildのプロジェクトのサービスロール名
+  - pipeline-for-pre-testingのS3バケットを参照するPolicyを、当該サービスロールに追加
+
+*e.g.*
+
+```sh
+TESTING_PROJECT_NAME=<CodeBuild Project Name for Testing>
+TESTING_ROLE_ARN=$(aws codebuild batch-get-projects \
+    --names ${TESTING_PROJECT_NAME} \
+    --query 'projects[].serviceRole' \
+    --output text)
+TESTING_ROLE_NAME=${TESTING_ROLE_ARN##*/}
+```
 
 ```sh
 aws cloudformation create-stack \

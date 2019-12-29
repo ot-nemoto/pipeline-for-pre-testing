@@ -51,7 +51,7 @@ Resources:
   #      ###### #    # #    # #    # ######
   #      #    # #    # #    # #    # #    #
   ###### #    # #    # #####  #####  #    #
-  LambdaExecutionRole:
+  WakeUpFunctionRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -63,12 +63,12 @@ Resources:
           Action: sts:AssumeRole
       ManagedPolicyArns:
       - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-  LambdaExecutionPolicy:
+  WakeUpFunctionPolicy:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName: !Sub ${Name}
       Roles:
-      - !Ref LambdaExecutionRole
+      - !Ref WakeUpFunctionRole
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -114,7 +114,7 @@ Resources:
               new_zip.write('/tmp/env.sh', arcname = 'env.sh', compress_type = zipfile.ZIP_DEFLATED)
             bucket.upload_file('/tmp/env.zip', 'env.zip')
             return { 'statusCode': 200 }
-      Role: !GetAtt LambdaExecutionRole.Arn
+      Role: !GetAtt WakeUpFunctionRole.Arn
       Runtime: python3.7
   WakeUpFunctionPermission:
     Type: AWS::Lambda::Permission
@@ -123,6 +123,52 @@ Resources:
       FunctionName: !Ref WakeUpFunction
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/*/POST/"
+
+  NotifyFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+  NotifyFunctionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${Name}
+      Roles:
+      - !Ref NotifyFunctionRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Action: s3:PutObject
+          Resource: !Sub "arn:aws:s3:::${S3Bucket}/*"
+        - Effect: Allow
+          Action:
+          - codepipeline:PutJobSuccessResult
+          - codepipeline:PutJobFailureResult
+          Resource: "*"
+  NotifyFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Code:
+        ZipFile: !Sub |
+          # coding: utf-8
+          import json
+          import boto3
+          def handler(event, context):
+            print(json.dumps(event))
+            code_pipeline = boto3.client('codepipeline')
+            job_id = event['CodePipeline.job']['id']
+            code_pipeline.put_job_success_result(jobId = job_id)
+      Role: !GetAtt NotifyFunctionRole.Arn
+      Runtime: python3.7
 
   #####  #####  ######    #    # ###### #####   ####  ######
   #    # #    # #         ##  ## #      #    # #    # #
@@ -268,7 +314,7 @@ Resources:
         Actions:
         - Name: CodeBuild
           ActionTypeId:
-            Category: Build
+            Category: Test
             Owner: AWS
             Version: 1
             Provider: CodeBuild
@@ -278,6 +324,19 @@ Resources:
           - Name: TestingOutput
           Configuration:
             ProjectName: !Ref TestingProjectName
+          RunOrder: 1
+      - Name: Approve
+        Actions:
+        - Name: Approve
+          ActionTypeId:
+            Category: Invoke
+            Owner: AWS
+            Version: 1
+            Provider: Lambda
+          InputArtifacts:
+          - Name: TestingOutput
+          Configuration:
+            FunctionName: !Ref NotifyFunction
           RunOrder: 1
     DependsOn:
     - PipelineManagedPolicy
