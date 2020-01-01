@@ -153,6 +153,12 @@ Resources:
           Action:
           - codepipeline:PutJobSuccessResult
           - codepipeline:PutJobFailureResult
+          - codepipeline:GetJobDetails
+          - codepipeline:ListActionExecutions
+          Resource: "*"
+        - Effect: Allow
+          Action:
+          - s3:GetObject
           Resource: "*"
   NotifyFunction:
     Type: AWS::Lambda::Function
@@ -163,11 +169,94 @@ Resources:
           # coding: utf-8
           import json
           import boto3
+          import zipfile
+          import os
+          from datetime import datetime
+          from decimal import Decimal
+
+          def expire_encoda(object):
+            if isinstance(object, datetime):
+              return object.isoformat()
+            if isinstance(object, Decimal):
+              return float(object)
+
+          def get_pullrequest_url(inputArtifacts):
+            dict = get_github_env(inputArtifacts)
+            return dict['URL']
+
+          def get_github_env(inputArtifacts):
+            s3 = boto3.client('s3')
+            for inputArtifact in inputArtifacts:
+              if inputArtifact['name'] != "SourceOutput":
+                continue
+              print(json.dumps(inputArtifact, default = expire_encoda))
+              bucket_name = inputArtifact['location']['s3Location']['bucketName']
+              object_key = inputArtifact['location']['s3Location']['objectKey']
+              with open('/tmp/env.zip', 'wb') as data:
+                s3.download_fileobj(bucket_name, object_key, data)
+              zfile = zipfile.ZipFile('/tmp/env.zip')
+              for filename in zfile.namelist():
+                if not os.path.basename('/tmp/' + filename):
+                  os.mkdir('/tmp/' + filename)
+                else:
+                  with open('/tmp/' + str(filename), 'wb') as f:
+                    f.write(zfile.read(filename))
+            ret = {}
+            if os.path.isfile('/tmp/env.sh') is True:
+              f = open('/tmp/env.sh', 'r')
+              lines = f.readlines()
+              f.close()
+              for line in lines:
+                l = line.strip().split('=', 1)
+                ret[l[0]] = l[1]
+            return ret
+
           def handler(event, context):
             print(json.dumps(event))
             code_pipeline = boto3.client('codepipeline')
-            job_id = event['CodePipeline.job']['id']
-            code_pipeline.put_job_success_result(jobId = job_id)
+            try:
+              job_id = event['CodePipeline.job']['id']
+              # PullRequestUrl
+              url = get_pullrequest_url(event['CodePipeline.job']['data']['inputArtifacts'])
+              # Comment to PullRequest
+              job_details = code_pipeline.get_job_details(jobId = job_id)
+              print(json.dumps(job_details))
+              pipeline_name = job_details['jobDetails']['data']['pipelineContext']['pipelineName']
+              pipeline_execution_id = job_details['jobDetails']['data']['pipelineContext']['pipelineExecutionId']
+              actions = code_pipeline.list_action_executions(
+                pipelineName = pipeline_name,
+                filter = {
+                  'pipelineExecutionId': pipeline_execution_id
+                }
+              )
+              print(json.dumps(actions, default = expire_encoda))
+              for actionExecutionDetail in actions['actionExecutionDetails']:
+                if actionExecutionDetail['stageName'] != "Testing":
+                  continue
+                print(json.dumps(actionExecutionDetail, default = expire_encoda))
+                codebuild_url = actionExecutionDetail['output']['executionResult']['externalExecutionUrl']
+                cmd = [
+                  "curl",
+                  "-XPOST",
+                  "-H 'Accept:application/vnd.github.black-cat-preview+json'",
+                  "-H 'Authorization:token ${GitHubOAuthToken}'",
+                  "--data '{\"body\": \"**Test was successful.**\n*ref* [CodeBuild](%s)\", \"event\":\"APPROVE\"}'" % codebuild_url,
+                  "'%s'" % url
+                ]
+                delimiter = ' '
+                print("cmd:%s" % delimiter.join(cmd))
+                req = os.system(delimiter.join(cmd))
+                print(req)
+              code_pipeline.put_job_success_result(jobId = job_id)
+            except Exception as e:
+              print(e)
+              code_pipeline.put_job_failure_result(
+                jobId = job_id,
+                failureDetails = {
+                  'type': 'JobFailed',
+                  'message': "{0}".format(e)
+                }
+              )
       Role: !GetAtt NotifyFunctionRole.Arn
       Runtime: python3.7
 
@@ -328,13 +417,14 @@ Resources:
           RunOrder: 1
       - Name: Approve
         Actions:
-        - Name: Approve
+        - Name: Lambda
           ActionTypeId:
             Category: Invoke
             Owner: AWS
             Version: 1
             Provider: Lambda
           InputArtifacts:
+          - Name: SourceOutput
           - Name: TestingOutput
           Configuration:
             FunctionName: !Ref NotifyFunction
