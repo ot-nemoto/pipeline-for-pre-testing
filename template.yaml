@@ -171,8 +171,12 @@ Resources:
           import boto3
           import zipfile
           import os
+          import urllib.parse
           from datetime import datetime
           from decimal import Decimal
+
+          code_pipeline = boto3.client('codepipeline')
+          s3 = boto3.client('s3')
 
           def expire_encoda(object):
             if isinstance(object, datetime):
@@ -185,15 +189,14 @@ Resources:
             return dict['URL']
 
           def get_github_env(inputArtifacts):
-            s3 = boto3.client('s3')
             for inputArtifact in inputArtifacts:
               if inputArtifact['name'] != "SourceOutput":
                 continue
               print(json.dumps(inputArtifact, default = expire_encoda))
-              bucket_name = inputArtifact['location']['s3Location']['bucketName']
-              object_key = inputArtifact['location']['s3Location']['objectKey']
+              bucket = inputArtifact['s3location']['bucket']
+              key = inputArtifact['s3location']['key']
               with open('/tmp/env.zip', 'wb') as data:
-                s3.download_fileobj(bucket_name, object_key, data)
+                s3.download_fileobj(bucket, key, data)
               zfile = zipfile.ZipFile('/tmp/env.zip')
               for filename in zfile.namelist():
                 if not os.path.basename('/tmp/' + filename):
@@ -213,50 +216,46 @@ Resources:
 
           def handler(event, context):
             print(json.dumps(event))
-            code_pipeline = boto3.client('codepipeline')
-            try:
-              job_id = event['CodePipeline.job']['id']
-              # PullRequestUrl
-              url = get_pullrequest_url(event['CodePipeline.job']['data']['inputArtifacts'])
-              # Comment to PullRequest
-              job_details = code_pipeline.get_job_details(jobId = job_id)
-              print(json.dumps(job_details))
-              pipeline_name = job_details['jobDetails']['data']['pipelineContext']['pipelineName']
-              pipeline_execution_id = job_details['jobDetails']['data']['pipelineContext']['pipelineExecutionId']
-              actions = code_pipeline.list_action_executions(
-                pipelineName = pipeline_name,
-                filter = {
-                  'pipelineExecutionId': pipeline_execution_id
-                }
-              )
-              print(json.dumps(actions, default = expire_encoda))
-              for actionExecutionDetail in actions['actionExecutionDetails']:
-                if actionExecutionDetail['stageName'] != "Testing":
-                  continue
+            pipeline = event['detail']['pipeline']
+            execution_id = event['detail']['execution-id']
+            actions = code_pipeline.list_action_executions(
+              pipelineName = pipeline,
+              filter = {
+                'pipelineExecutionId': execution_id
+              }
+            )
+            print(json.dumps(actions, default = expire_encoda))
+            urls = {}
+            for actionExecutionDetail in actions['actionExecutionDetails']:
+              if actionExecutionDetail['stageName'] == "Testing":
                 print(json.dumps(actionExecutionDetail, default = expire_encoda))
-                codebuild_url = actionExecutionDetail['output']['executionResult']['externalExecutionUrl']
-                cmd = [
-                  "curl",
-                  "-XPOST",
-                  "-H 'Accept:application/vnd.github.black-cat-preview+json'",
-                  "-H 'Authorization:token ${GitHubOAuthToken}'",
-                  "--data '{\"body\": \"**Test was successful.**\n*ref* [CodeBuild](%s)\", \"event\":\"APPROVE\"}'" % codebuild_url,
-                  "'%s'" % url
-                ]
-                delimiter = ' '
-                print("cmd:%s" % delimiter.join(cmd))
-                req = os.system(delimiter.join(cmd))
-                print(req)
-              code_pipeline.put_job_success_result(jobId = job_id)
-            except Exception as e:
-              print(e)
-              code_pipeline.put_job_failure_result(
-                jobId = job_id,
-                failureDetails = {
-                  'type': 'JobFailed',
-                  'message': "{0}".format(e)
-                }
-              )
+                urls['testing'] = actionExecutionDetail['output']['executionResult']['externalExecutionUrl']
+              elif actionExecutionDetail['stageName'] == "PreMerge":
+                print(json.dumps(actionExecutionDetail, default = expire_encoda))
+                url = get_pullrequest_url(actionExecutionDetail['input']['inputArtifacts'])
+                urls['pullrequest'] = '/'.join([url, 'reviews'])
+            print(urls)
+            payload = {
+              "body": "**Test was successful.**\n*ref* [CodeBuild](%s)" % urls['testing'], 
+              "event": "APPROVE"
+            } if event['detail']['state'] == 'SUCCEEDED' else {
+              "body": "**Test failed.**\n*ref* [CodeBuild](%s)" % urls['testing'], 
+              "event": "REQUEST_CHANGES"
+            }
+            print(payload)
+            print(json.dumps(payload))
+            cmd = [
+              "curl",
+              "-XPOST",
+              "-H 'Accept:application/vnd.github.black-cat-preview+json'",
+              "-H 'Authorization:token ${GitHubOAuthToken}'",
+              "--data '%s'" % json.dumps(payload),
+              "'%s'" % urls['pullrequest']
+            ]
+            delimiter = ' '
+            print("cmd:%s" % delimiter.join(cmd))
+            req = os.system(delimiter.join(cmd))
+            print(json.dumps(req))
       Role: !GetAtt NotifyFunctionRole.Arn
       Runtime: python3.7
 
@@ -415,20 +414,6 @@ Resources:
           Configuration:
             ProjectName: !Ref TestingProjectName
           RunOrder: 1
-      - Name: Approve
-        Actions:
-        - Name: Lambda
-          ActionTypeId:
-            Category: Invoke
-            Owner: AWS
-            Version: 1
-            Provider: Lambda
-          InputArtifacts:
-          - Name: SourceOutput
-          - Name: TestingOutput
-          Configuration:
-            FunctionName: !Ref NotifyFunction
-          RunOrder: 1
     DependsOn:
     - PipelineManagedPolicy
   PipelineServiceRole:
@@ -541,6 +526,30 @@ Resources:
           - devicefarm:CreateUpload
           - devicefarm:ScheduleRun
           Resource: "*"
+
+  CodePipelineEventsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source:
+        - aws.codepipeline
+        detail-type:
+        - CodePipeline Pipeline Execution State Change
+        detail:
+          state:
+          - FAILED
+          - SUCCEEDED
+      State: ENABLED
+      Targets:
+      - Arn: !GetAtt NotifyFunction.Arn
+        Id: NotifyFunction
+  NotifyFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref NotifyFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CodePipelineEventsRule.Arn
 
 Outputs:
   InvokeURL:
