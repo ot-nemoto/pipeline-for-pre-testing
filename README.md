@@ -45,9 +45,9 @@ aws ssm put-parameter \
 **テンプレートから環境を構築**
 
 - *TESTING_PROJECT_NAME*
-  - テストを行うCodeBuildのプロジェクト名
+  - 以下の工程でWebHookを登録するリポジトリのテストを行うCodeBuildのプロジェクト名
 - *TESTING_ROLE_NAME*
-  - テストを行うCodeBuildのプロジェクトのサービスロール名
+  - 以下の工程でWebHookを登録するリポジトリのテストを行うCodeBuildのプロジェクトのサービスロール名
   - pipeline-for-pre-testingのS3バケットを参照するPolicyを、当該サービスロールに追加
 
 *e.g.*
