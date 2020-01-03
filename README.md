@@ -99,5 +99,5 @@ aws s3 rm s3://${S3BUCKET} --recursive
 
 ```sh
 aws cloudformation delete-stack \
-    --stack-name pipeline-for-ecs-devploy-v2
+    --stack-name pipeline-for-pre-testing
 ```

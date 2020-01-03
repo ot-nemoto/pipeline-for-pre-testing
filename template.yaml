@@ -234,7 +234,7 @@ Resources:
                 print(json.dumps(actionExecutionDetail, default = expire_encoda))
                 url = get_pullrequest_url(actionExecutionDetail['input']['inputArtifacts'])
                 urls['pullrequest'] = '/'.join([url, 'reviews'])
-            print(urls)
+            print(json.dumps(urls))
             payload = {
               "body": "**Test was successful.**\n*ref* [CodeBuild](%s)" % urls['testing'], 
               "event": "APPROVE"
@@ -242,8 +242,6 @@ Resources:
               "body": "**Test failed.**\n*ref* [CodeBuild](%s)" % urls['testing'], 
               "event": "REQUEST_CHANGES"
             }
-            print(payload)
-            print(json.dumps(payload))
             cmd = [
               "curl",
               "-XPOST",
@@ -253,9 +251,9 @@ Resources:
               "'%s'" % urls['pullrequest']
             ]
             delimiter = ' '
-            print("cmd:%s" % delimiter.join(cmd))
+            print("cmd - %s" % delimiter.join(cmd))
             req = os.system(delimiter.join(cmd))
-            print(json.dumps(req))
+            print(req)
       Role: !GetAtt NotifyFunctionRole.Arn
       Runtime: python3.7
 
@@ -554,3 +552,5 @@ Resources:
 Outputs:
   InvokeURL:
     Value: !Sub https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/v1
+  S3Bucket:
+    Value: !Ref S3Bucket
