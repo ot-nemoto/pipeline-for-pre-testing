@@ -227,19 +227,25 @@ Resources:
             print(json.dumps(actions, default = expire_encoda))
             urls = {}
             for actionExecutionDetail in actions['actionExecutionDetails']:
-              if actionExecutionDetail['stageName'] == "Testing":
+              if actionExecutionDetail['stageName'] == "Source":
+                print(json.dumps(actionExecutionDetail, default = expire_encoda))
+                url = get_pullrequest_url(actionExecutionDetail['output']['outputArtifacts'])
+                urls['pullrequest'] = '/'.join([url, 'reviews'])
+              elif actionExecutionDetail['stageName'] == "Testing":
                 print(json.dumps(actionExecutionDetail, default = expire_encoda))
                 urls['testing'] = actionExecutionDetail['output']['executionResult']['externalExecutionUrl']
               elif actionExecutionDetail['stageName'] == "PreMerge":
                 print(json.dumps(actionExecutionDetail, default = expire_encoda))
-                url = get_pullrequest_url(actionExecutionDetail['input']['inputArtifacts'])
-                urls['pullrequest'] = '/'.join([url, 'reviews'])
+                urls['premerge'] = actionExecutionDetail['output']['executionResult']['externalExecutionUrl']
             print(json.dumps(urls))
             payload = {
               "body": "**Test was successful.**\n*ref* [CodeBuild](%s)" % urls['testing'], 
               "event": "APPROVE"
             } if event['detail']['state'] == 'SUCCEEDED' else {
               "body": "**Test failed.**\n*ref* [CodeBuild](%s)" % urls['testing'], 
+              "event": "REQUEST_CHANGES"
+            } if urls.get('testing') is not None else {
+              "body": "**Merge failed.**\n*ref* [CodeBuild](%s)" % urls['premerge'],
               "event": "REQUEST_CHANGES"
             }
             cmd = [
