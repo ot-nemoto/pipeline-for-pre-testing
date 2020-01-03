@@ -6,6 +6,8 @@ GitHubのプルリクエストが発生した際に、プルリクエストし�
 
 ## 構成
 
+![構成図](https://github.com/ot-nemoto/pipeline-for-pre-testing/blob/images/pipeline-for-pre-testing.png)
+
 - GitHubのブランチのプルリクエストが発生した際、WebhookでAPI GatewayのエンドポイントをHook
 - API Gatewayは、hookされた情報をS3に配置するLambdaを呼び出す（**WakeUpFunction**）
 - S3にファイルを配置したことをトリガーにパイプラインを実行（**Source**）
