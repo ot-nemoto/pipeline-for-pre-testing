@@ -87,10 +87,10 @@ aws cloudformation describe-stacks \
 Settings > Webhooks > Add webhook
 
 - Payload URL: (e.g.) https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/v1
-- Content type: application/json
+- Content type: **application/json**
 - Secret: *empty*
-- SSL verification: Enable SSL verification
-- Which events would you like to trigger this webhook?: Let me select individual events.
+- SSL verification: **Enable SSL verification**
+- Which events would you like to trigger this webhook?: **Let me select individual events.**
   - Pull requests
 - Active: *checked*
 
